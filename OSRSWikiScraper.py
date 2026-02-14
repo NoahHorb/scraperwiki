@@ -13,7 +13,7 @@ from collections import defaultdict
 
 # Configuration
 WIKI_API_URL = "https://oldschool.runescape.wiki/api.php"
-USER_AGENT = "PvMPerformanceTracker/1.0 (NPC Database Scraper; Noah.Horbinski@email.com)"
+USER_AGENT = "PvMPerformanceTracker/1.0 (NPC Database Scraper; Noah.Horbinski@gmail.com)"
 RATE_LIMIT_DELAY = 0.5  # Seconds between requests (be respectful!)
 
 class OSRSWikiScraper:
@@ -83,6 +83,28 @@ class OSRSWikiScraper:
 
         return None
 
+    def find_matching_brace(self, text: str, start_pos: int) -> int:
+        """
+        Find the matching closing braces for an opening {{
+        Returns the position of the matching }}
+        """
+        depth = 0
+        i = start_pos
+
+        while i < len(text) - 1:
+            if text[i:i+2] == '{{':
+                depth += 1
+                i += 2
+            elif text[i:i+2] == '}}':
+                depth -= 1
+                if depth == 0:
+                    return i
+                i += 2
+            else:
+                i += 1
+
+        return -1
+
     def parse_infobox_monster(self, wiki_text: str) -> List[Dict[str, Any]]:
         """
         Parse all Infobox Monster templates from wiki text
@@ -90,87 +112,121 @@ class OSRSWikiScraper:
         """
         infoboxes = []
 
-        # Find all Infobox Monster templates (there can be multiple per page)
-        # Pattern: {{Infobox Monster ... }}
-        # Need to handle nested braces carefully
+        print(f"  [DEBUG] Wiki text length: {len(wiki_text)} characters")
+        print(f"  [DEBUG] First 500 chars: {wiki_text[:500]}")
 
         # First, try to find Multi Infobox structure
-        multi_infobox_match = re.search(
-            r'\{\{Multi Infobox(.*?)\n\}\}',
-            wiki_text,
-            re.DOTALL | re.IGNORECASE
-        )
+        multi_infobox_pattern = r'\{\{Multi Infobox'
+        multi_match = re.search(multi_infobox_pattern, wiki_text, re.IGNORECASE)
 
-        if multi_infobox_match:
-            # Extract all item sections from Multi Infobox
-            multi_content = multi_infobox_match.group(1)
+        if multi_match:
+            print(f"  [DEBUG] Found Multi Infobox at position {multi_match.start()}")
 
-            # Find all |text# = ... followed by |item# = {{Infobox Monster ... }}
-            # Use regex to find text/item pairs
-            lines = multi_content.split('\n')
+            # Find the matching closing braces
+            start_pos = multi_match.start()
+            end_pos = self.find_matching_brace(wiki_text, start_pos)
 
-            current_text_label = None
-            in_infobox = False
-            infobox_content_lines = []
-            brace_depth = 0
+            if end_pos != -1:
+                multi_content = wiki_text[multi_match.end():end_pos]
+                print(f"  [DEBUG] Multi Infobox content length: {len(multi_content)}")
+                print(f"  [DEBUG] First 300 chars of multi content: {multi_content[:300]}")
 
-            for line in lines:
-                # Check for text label
-                text_match = re.match(r'\|text\d+\s*=\s*(.+)', line)
-                if text_match:
-                    current_text_label = text_match.group(1).strip()
-                    continue
+                # Find all text/item pairs
+                text_pattern = re.compile(r'\|text\d*\s*=\s*([^\n]+)')
+                item_pattern = re.compile(r'\|item\d*\s*=')
 
-                # Check for item start
-                item_match = re.match(r'\|item\d+\s*=\s*$', line)
-                if item_match:
-                    in_infobox = False
-                    infobox_content_lines = []
-                    continue
+                text_matches = list(text_pattern.finditer(multi_content))
+                item_matches = list(item_pattern.finditer(multi_content))
 
-                # Check for Infobox Monster start
-                if re.match(r'\s*\{\{Infobox Monster', line, re.IGNORECASE):
-                    in_infobox = True
-                    brace_depth = 2  # Starting with {{
-                    infobox_content_lines = []
-                    continue
+                print(f"  [DEBUG] Found {len(text_matches)} text labels and {len(item_matches)} items")
 
-                # If we're inside an infobox, track braces
-                if in_infobox:
-                    # Count braces
-                    brace_depth += line.count('{{') * 2
-                    brace_depth += line.count('{')
-                    brace_depth -= line.count('}}') * 2
-                    brace_depth -= line.count('}')
+                # For each item marker, find the corresponding Infobox Monster
+                for i, item_match in enumerate(item_matches):
+                    item_start = item_match.end()
 
-                    # Add content
-                    if not line.strip().startswith('}}'):
-                        infobox_content_lines.append(line)
+                    # Find corresponding text label (should be before this item)
+                    text_label = None
+                    for text_match in reversed(text_matches):
+                        if text_match.start() < item_match.start():
+                            text_label = text_match.group(1).strip()
+                            break
 
-                    # Check if infobox is complete
-                    if brace_depth <= 0:
-                        # Parse this infobox
-                        infobox_text = '\n'.join(infobox_content_lines)
-                        infobox_data = self.parse_infobox_content(infobox_text, phase_label=current_text_label)
-                        if infobox_data:
-                            infoboxes.append(infobox_data)
-                        in_infobox = False
-                        current_text_label = None
+                    print(f"  [DEBUG] Item {i} has label: {text_label}")
+
+                    # Find the next item or text marker (to know where this infobox ends)
+                    next_marker_pos = len(multi_content)
+                    if i + 1 < len(item_matches):
+                        next_marker_pos = item_matches[i + 1].start()
+                    elif i < len(text_matches) - 1:
+                        # Check if there's a text marker after this
+                        for text_match in text_matches:
+                            if text_match.start() > item_match.start():
+                                next_marker_pos = text_match.start()
+                                break
+
+                    # Extract content between this item and the next marker
+                    section = multi_content[item_start:next_marker_pos]
+                    print(f"  [DEBUG] Section length: {len(section)}, first 200 chars: {section[:200]}")
+
+                    # Find {{Infobox Monster...}} in this section
+                    infobox_pattern = r'\{\{Infobox Monster'
+                    infobox_match = re.search(infobox_pattern, section, re.IGNORECASE)
+
+                    if infobox_match:
+                        print(f"  [DEBUG] Found Infobox Monster in item {i}")
+
+                        # Find matching closing braces for this infobox
+                        infobox_start = infobox_match.start()
+                        infobox_end = self.find_matching_brace(section, infobox_start)
+
+                        if infobox_end != -1:
+                            infobox_content = section[infobox_match.end():infobox_end]
+                            print(f"  [DEBUG] Infobox content length: {len(infobox_content)}")
+
+                            infobox_data = self.parse_infobox_content(infobox_content, phase_label=text_label)
+                            if infobox_data:
+                                infoboxes.append(infobox_data)
+                                print(f"  [DEBUG] Successfully parsed infobox {i}")
+                        else:
+                            print(f"  [DEBUG] Could not find closing braces for infobox {i}")
+                    else:
+                        print(f"  [DEBUG] No Infobox Monster found in item {i}")
+            else:
+                print(f"  [DEBUG] Could not find closing braces for Multi Infobox")
 
         # Also check for standalone Infobox Monster (not in Multi Infobox)
-        standalone_matches = re.finditer(
-            r'\{\{Infobox Monster\s*\n(.*?)\n\}\}',
-            wiki_text,
-            re.DOTALL | re.IGNORECASE
-        )
+        if not multi_match:
+            print(f"  [DEBUG] No Multi Infobox found, looking for standalone Infobox Monster")
 
-        for match in standalone_matches:
-            # Skip if this is already inside a Multi Infobox
-            if not multi_infobox_match or match.start() < multi_infobox_match.start() or match.end() > multi_infobox_match.end():
-                infobox_data = self.parse_infobox_content(match.group(1))
-                if infobox_data:
-                    infoboxes.append(infobox_data)
+            standalone_pattern = r'\{\{Infobox Monster'
 
+            pos = 0
+            while True:
+                match = re.search(standalone_pattern, wiki_text[pos:], re.IGNORECASE)
+                if not match:
+                    break
+
+                print(f"  [DEBUG] Found standalone Infobox Monster at position {pos + match.start()}")
+
+                # Find matching closing braces
+                actual_start = pos + match.start()
+                end_pos = self.find_matching_brace(wiki_text, actual_start)
+
+                if end_pos != -1:
+                    infobox_content = wiki_text[actual_start + match.end():end_pos]
+                    print(f"  [DEBUG] Standalone infobox content length: {len(infobox_content)}")
+
+                    infobox_data = self.parse_infobox_content(infobox_content)
+                    if infobox_data:
+                        infoboxes.append(infobox_data)
+                        print(f"  [DEBUG] Successfully parsed standalone infobox")
+
+                    pos = end_pos + 2
+                else:
+                    print(f"  [DEBUG] Could not find closing braces for standalone infobox")
+                    break
+
+        print(f"  [DEBUG] Total infoboxes parsed: {len(infoboxes)}")
         return infoboxes
 
     def parse_infobox_content(self, infobox_content: str, phase_label: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -194,8 +250,15 @@ class OSRSWikiScraper:
                     value = self.clean_wiki_text(value)
                     raw_data[key] = value
 
+        print(f"    [DEBUG] Parsed {len(raw_data)} key-value pairs from infobox")
+
+        # Show some sample keys
+        sample_keys = list(raw_data.keys())[:10]
+        print(f"    [DEBUG] Sample keys: {sample_keys}")
+
         # Check if this infobox has multiple versions
         has_versions = any(key.startswith('version') for key in raw_data.keys())
+        print(f"    [DEBUG] Has versions: {has_versions}")
 
         if has_versions:
             # Find how many versions there are
@@ -204,6 +267,8 @@ class OSRSWikiScraper:
                 match = re.match(r'(\w+?)(\d+)$', key)
                 if match:
                     version_numbers.add(int(match.group(2)))
+
+            print(f"    [DEBUG] Version numbers found: {sorted(version_numbers)}")
 
             # Extract data for each version
             for version_num in sorted(version_numbers):
@@ -222,12 +287,14 @@ class OSRSWikiScraper:
                         # This is a shared field (no version number)
                         version_data[key] = value
 
+                print(f"    [DEBUG] Version {version_num} has {len(version_data)} fields")
                 data['versions'].append(version_data)
         else:
             # Single version, use all data as-is
             version_data = raw_data.copy()
             version_data['versionNumber'] = 1
             version_data['versionName'] = raw_data.get('name', 'Default')
+            print(f"    [DEBUG] Single version with {len(version_data)} fields")
             data['versions'].append(version_data)
 
         return data if data['versions'] else None
@@ -242,14 +309,15 @@ class OSRSWikiScraper:
         # Remove HTML comments
         text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
 
-        # Remove wiki links [[link|text]] -> text
-        text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]*)\]\]', r'\1', text)
+        # Remove wiki links [[link|text]] -> text (but keep the link text for max hit parsing)
+        # DON'T remove the [[ ]] from max hit values yet - we need them for parsing
+        # text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]*)\]\]', r'\1', text)
 
         # Remove wiki formatting
-        text = re.sub(r"'{2,}", '', text)  # Bold/italic
+        # text = re.sub(r"'{2,}", '', text)  # Bold/italic
 
-        # Remove templates like {{template}}
-        text = re.sub(r'\{\{[^}]*\}\}', '', text)
+        # Remove templates like {{template}} - but be careful not to remove content
+        # text = re.sub(r'\{\{[^}]*\}\}', '', text)
 
         # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text).strip()
@@ -288,11 +356,15 @@ class OSRSWikiScraper:
         """
         Parse max hit data from infobox
         Handles different attack styles with different max hits
-        Also handles complex formats like:
+        Also handles:
         - "30 ([[Magic]]), 32 ([[Ranged]]), 80 ([[Dragonfire]]), 121 (Bomb)"
         - "47 <br/> 60 (charge)" → 47 for all styles, 60 for charge
+        - "24" with no type → 24 for all styles in attackStyle
         """
         max_hits = {}
+
+        # Get attack styles for this NPC
+        attack_style = infobox_data.get('attack style', '').lower()
 
         # Check for different max hit fields
         fields_to_check = [
@@ -308,6 +380,8 @@ class OSRSWikiScraper:
         for field_name, attack_type in fields_to_check:
             if field_name in infobox_data:
                 value = infobox_data[field_name]
+
+                print(f"    [DEBUG] Found field '{field_name}' = '{value[:100]}...'")
 
                 # Check if this contains <br/> or <br> - indicates multiple max hits
                 if '<br' in value.lower():
@@ -353,8 +427,6 @@ class OSRSWikiScraper:
 
                     # If we found a base max hit, apply it to all attack styles
                     if base_max_hit is not None:
-                        attack_style = infobox_data.get('attack style', '').lower()
-
                         # Determine which styles are used
                         if 'melee' in attack_style:
                             max_hits.setdefault('melee', base_max_hit)
@@ -362,18 +434,22 @@ class OSRSWikiScraper:
                             max_hits.setdefault('magic', base_max_hit)
                         if 'ranged' in attack_style or 'range' in attack_style:
                             max_hits.setdefault('ranged', base_max_hit)
+                        if 'crush' in attack_style and 'melee' not in attack_style:
+                            max_hits.setdefault('melee', base_max_hit)
 
                         # If no specific styles detected, just set default
-                        if not any(s in attack_style for s in ['melee', 'magic', 'mage', 'ranged', 'range']):
+                        if not any(s in attack_style for s in ['melee', 'magic', 'mage', 'ranged', 'range', 'crush', 'slash', 'stab']):
                             max_hits['default'] = base_max_hit
 
                 # Check if this is a complex format with multiple attacks separated by commas
                 elif '[[' in value or '),' in value:
+                    print(f"    [DEBUG] Parsing complex format...")
                     # Split by commas to get individual attacks
                     parts = value.split(',')
 
                     for part in parts:
                         part = part.strip()
+                        print(f"      [DEBUG] Parsing part: '{part}'")
 
                         # Extract number and attack type
                         # Pattern: "number ([[Attack Type]])" or "number (Attack Type)" or "number (Type/Name)"
@@ -382,6 +458,8 @@ class OSRSWikiScraper:
                         if match:
                             hit_value = int(match.group(1))
                             attack_name = match.group(2) or match.group(3)
+
+                            print(f"        [DEBUG] Matched: hit_value={hit_value}, attack_name={attack_name}")
 
                             # Clean up attack name
                             attack_name = attack_name.strip().lower()
@@ -406,7 +484,9 @@ class OSRSWikiScraper:
                                 attack_name = attack_name.replace(' ', '_')
 
                             max_hits[attack_name] = hit_value
+                            print(f"        [DEBUG] Added: {attack_name} = {hit_value}")
                         else:
+                            print(f"        [DEBUG] No match for part: '{part}'")
                             # Try to extract just a number
                             num_match = re.search(r'(\d+)', part)
                             if num_match and not max_hits:
@@ -417,21 +497,38 @@ class OSRSWikiScraper:
                     # Simple format, just a number
                     hit_value = self.parse_number(value)
                     if hit_value is not None:
-                        max_hits[attack_type] = hit_value
+                        # If this is the "max hit" field (not a specific style), apply to all styles
+                        if field_name in ['max hit', 'maxhit']:
+                            # Apply to all attack styles from attack_style field
+                            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                                max_hits['melee'] = hit_value
+                            if 'magic' in attack_style or 'mage' in attack_style:
+                                max_hits['magic'] = hit_value
+                            if 'ranged' in attack_style or 'range' in attack_style:
+                                max_hits['ranged'] = hit_value
+
+                            # If no styles detected or only has dragonfire/special, set default
+                            if not max_hits:
+                                max_hits[attack_type] = hit_value
+                        else:
+                            # Specific style field
+                            max_hits[attack_type] = hit_value
 
         # If we only have 'default', check attack style to categorize it
         if 'default' in max_hits and len(max_hits) == 1:
-            attack_style = infobox_data.get('attack style', '').lower()
+            default_val = max_hits['default']
+            del max_hits['default']
 
-            if 'melee' in attack_style:
-                max_hits['melee'] = max_hits['default']
-                del max_hits['default']
-            elif 'magic' in attack_style or 'mage' in attack_style:
-                max_hits['magic'] = max_hits['default']
-                del max_hits['default']
-            elif 'ranged' in attack_style or 'range' in attack_style:
-                max_hits['ranged'] = max_hits['default']
-                del max_hits['default']
+            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                max_hits['melee'] = default_val
+            if 'magic' in attack_style or 'mage' in attack_style:
+                max_hits['magic'] = default_val
+            if 'ranged' in attack_style or 'range' in attack_style:
+                max_hits['ranged'] = default_val
+
+            # If still empty, put it back as default
+            if not max_hits:
+                max_hits['default'] = default_val
 
         return max_hits
 
@@ -526,21 +623,44 @@ class OSRSWikiScraper:
         """
         infoboxes = self.parse_infobox_monster(wiki_text)
 
+        print(f"\n{'='*60}")
+        print(f"DEBUG: {page_title}")
+        print(f"{'='*60}")
+        print(f"Found {len(infoboxes)} infoboxes")
+
         if not infoboxes:
             return []
 
         all_npcs = []
 
-        for infobox in infoboxes:
+        for infobox_idx, infobox in enumerate(infoboxes):
             phase_label = infobox.get('phaseLabel')  # e.g., "Normal", "Shielded", "Burrowed"
 
+            print(f"\nInfobox {infobox_idx}:")
+            print(f"  Phase Label: {phase_label}")
+            print(f"  Versions: {len(infobox.get('versions', []))}")
+
             # Each infobox may have multiple versions
-            for version_data in infobox.get('versions', []):
+            for version_idx, version_data in enumerate(infobox.get('versions', [])):
+                print(f"\n  Version {version_idx}:")
+                print(f"    Version Number: {version_data.get('versionNumber')}")
+                print(f"    Version Name: {version_data.get('versionName')}")
+                print(f"    Has 'max hit' key: {'max hit' in version_data}")
+                print(f"    Has 'attack style' key: {'attack style' in version_data}")
+
+                if 'max hit' in version_data:
+                    print(f"    Max hit raw value: {version_data['max hit'][:150]}...")
+                if 'attack style' in version_data:
+                    print(f"    Attack style: {version_data['attack style']}")
+
                 # Parse max hits for different attack styles
                 max_hits = self.parse_max_hit(version_data)
 
+                print(f"    Parsed max_hits: {max_hits}")
+
                 if not max_hits:
                     # Skip versions with no max hit data
+                    print(f"    ✗ Skipping - no max hits parsed")
                     continue
 
                 # Create min hits (all default to 0, users can curate later)
@@ -641,102 +761,28 @@ class OSRSWikiScraper:
                         cleaned_data[k] = v
 
                 all_npcs.append(cleaned_data)
+                print(f"    ✓ Created NPC: {full_name}")
 
         return all_npcs
-        """
-        Extract structured NPC data from wiki page
-        """
-        infobox_data = self.parse_infobox_monster(wiki_text)
 
-        if not infobox_data:
-            return None
-
-        # Parse max hits for different attack styles
-        max_hits = self.parse_max_hit(infobox_data)
-
-        # Create min hits (all default to 0, users can curate later)
-        min_hits = {style: 0 for style in max_hits.keys()}
-
-        # Parse additional properties
-        attributes = self.parse_attributes(infobox_data)
-        immunities = self.parse_immunities(infobox_data)
-        venom_type = self.parse_venom_type(infobox_data)
-
-        # Extract other useful data
-        npc_data = {
-            'name': infobox_data.get('name', page_title),
-            'id': infobox_data.get('id', ''),
-            'combatLevel': self.parse_number(infobox_data.get('combat', '')),
-            'hitpoints': self.parse_number(infobox_data.get('hitpoints', '')),
-            'size': self.parse_number(infobox_data.get('size', '')),
-            'maxHit': max_hits,
-            'minHit': min_hits,
-            'attackSpeed': self.parse_number(infobox_data.get('attack speed', '')),
-            'attackStyle': infobox_data.get('attack style', ''),
-            'aggressive': infobox_data.get('aggressive', '').lower() == 'yes',
-
-            # Poison/Venom properties
-            'poisonous': infobox_data.get('poisonous', '').lower() == 'yes',
-            'venomType': venom_type,
-
-            # Attributes (demon, dragon, undead, etc.)
-            'attributes': attributes,
-
-            # Immunities
-            'immunities': immunities,
-
-            # Combat stats
-            'attackLevel': self.parse_number(infobox_data.get('att', '')),
-            'strengthLevel': self.parse_number(infobox_data.get('str', '')),
-            'defenceLevel': self.parse_number(infobox_data.get('def', '')),
-            'magicLevel': self.parse_number(infobox_data.get('mage', '')),
-            'rangedLevel': self.parse_number(infobox_data.get('range', '')),
-
-            # Defensive bonuses
-            'stabDefence': self.parse_number(infobox_data.get('dstab', '')),
-            'slashDefence': self.parse_number(infobox_data.get('dslash', '')),
-            'crushDefence': self.parse_number(infobox_data.get('dcrush', '')),
-            'magicDefence': self.parse_number(infobox_data.get('dmagic', '')),
-            'rangedDefence': self.parse_number(infobox_data.get('drange', '')),
-
-            # Offensive bonuses
-            'attackBonus': self.parse_number(infobox_data.get('astab', '')),  # Using stab as default
-            'strengthBonus': self.parse_number(infobox_data.get('astr', '')),
-            'rangedAttackBonus': self.parse_number(infobox_data.get('arange', '')),
-            'magicAttackBonus': self.parse_number(infobox_data.get('amagic', '')),
-
-            # Slayer info
-            'slayerLevel': self.parse_number(infobox_data.get('slaylvl', '')),
-            'slayerXp': self.parse_number(infobox_data.get('slayxp', '')),
-
-            # Metadata
-            'wikiPage': page_title,
-            'examine': infobox_data.get('examine', ''),
-        }
-
-        # Only include non-null values (but keep empty lists/dicts)
-        cleaned_data = {}
-        for k, v in npc_data.items():
-            if v is not None and v != '':
-                cleaned_data[k] = v
-            elif isinstance(v, (list, dict)) and len(v) > 0:
-                cleaned_data[k] = v
-
-        return cleaned_data
-
-    def scrape_all_npcs(self, limit: Optional[int] = None):
+    def scrape_all_npcs(self, limit: Optional[int] = None, test_pages: Optional[List[str]] = None):
         """
         Scrape all NPC pages and extract data
         """
-        pages = self.get_all_npc_pages()
-
-        if limit:
-            pages = pages[:limit]
+        if test_pages:
+            pages = test_pages
+            print(f"Testing with specific pages: {test_pages}")
+        else:
+            pages = self.get_all_npc_pages()
+            if limit:
+                pages = pages[:limit]
 
         total = len(pages)
 
         for i, page_title in enumerate(pages, 1):
+            print(f"\n{'='*60}")
             print(f"Processing {i}/{total}: {page_title}")
+            print(f"{'='*60}")
 
             try:
                 wiki_text = self.get_page_content(page_title)
@@ -750,23 +796,32 @@ class OSRSWikiScraper:
                                 # Use NPC ID(s) as key, or generate unique key
                                 npc_ids = npc_data.get('id', '')
                                 npc_name = npc_data.get('name', page_title)
+                                version = npc_data.get('version', '')
+                                phase = npc_data.get('phase', '')
 
-                                # Create a unique key
+                                # Create a unique key with version info
                                 if npc_ids:
                                     # Use first ID as primary key
                                     primary_id = npc_ids.split(',')[0].strip()
-                                    unique_key = f"{primary_id}"
+                                    if version or phase:
+                                        unique_key = f"{primary_id}_{version}_{phase}".replace(' ', '_').replace('-', '_')
+                                    else:
+                                        unique_key = f"{primary_id}"
                                 else:
                                     # Fallback to name-based key
-                                    unique_key = npc_name.replace(' ', '_').replace('(', '').replace(')', '')
+                                    unique_key = npc_name.replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
 
                                 self.npcs[unique_key] = npc_data
                                 print(f"  ✓ Extracted: {npc_name} (Max hits: {npc_data['maxHit']})")
                     else:
                         print(f"  ✗ No NPC data found")
+                else:
+                    print(f"  ✗ Could not fetch page content")
 
             except Exception as e:
                 print(f"  ✗ Error: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Rate limiting
             time.sleep(RATE_LIMIT_DELAY)
@@ -810,9 +865,9 @@ class OSRSWikiScraper:
         for style, count in sorted(attack_styles.items()):
             print(f"  {style}: {count} NPCs")
 
-        # List some examples
-        print("\nExample NPCs:")
-        for i, (npc_id, npc_data) in enumerate(list(self.npcs.items())[:5]):
+        # List all NPCs
+        print("\nAll extracted NPCs:")
+        for i, (npc_id, npc_data) in enumerate(self.npcs.items()):
             print(f"  {npc_data.get('name', npc_id)}: {npc_data.get('maxHit', {})}")
 
         print("="*60)
@@ -823,7 +878,7 @@ def main():
     Main execution
     """
     print("="*60)
-    print("OSRS Wiki NPC Database Scraper")
+    print("OSRS Wiki NPC Database Scraper - TEST MODE")
     print("="*60)
     print(f"API URL: {WIKI_API_URL}")
     print(f"User-Agent: {USER_AGENT}")
@@ -833,19 +888,17 @@ def main():
 
     scraper = OSRSWikiScraper()
 
-    # For testing, you can limit the number of NPCs
-    # scraper.scrape_all_npcs(limit=10)  # Test with 10 NPCs
-
-    # Full scrape (will take a while!)
+    # Test with just Vorkath and Doom of Mokhaiotl
+    test_pages = ['Vorkath', 'Doom_of_Mokhaiotl']
     scraper.scrape_all_npcs()
 
     # Print summary
     scraper.print_summary()
 
     # Save to file
-    scraper.save_database('npc_database.json')
+    scraper.save_database('npc_database_test.json')
 
-    print("\nDone! You can now manually curate minHit values for special attacks.")
+    print("\nDone! Check the debug output above to see what's happening.")
 
 
 if __name__ == '__main__':
