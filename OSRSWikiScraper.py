@@ -109,6 +109,11 @@ class OSRSWikiScraper:
         """
         Parse all Infobox Monster templates from wiki text
         Returns a list since some pages have multiple versions (Entry/Normal/Hard, phases, etc.)
+
+        Handles three scenarios:
+        1. Multi Infobox with multiple {{Infobox Monster}} templates (e.g., Doom with phases)
+        2. Standalone {{Infobox Monster}} with multiple versions (e.g., Zulrah)
+        3. Multiple standalone {{Infobox Monster}} templates (e.g., bosses with separate forms)
         """
         infoboxes = []
 
@@ -206,15 +211,20 @@ class OSRSWikiScraper:
                 if not match:
                     break
 
-                print(f"  [DEBUG] Found standalone Infobox Monster at position {pos + match.start()}")
+                # Calculate absolute positions
+                match_start_absolute = pos + match.start()  # Where {{ starts in full text
+                match_end_absolute = pos + match.end()      # Where pattern ends in full text
 
-                # Find matching closing braces
-                actual_start = pos + match.start()
-                end_pos = self.find_matching_brace(wiki_text, actual_start)
+                print(f"  [DEBUG] Found standalone Infobox Monster at position {match_start_absolute}")
+
+                # Find matching closing braces (using absolute position)
+                end_pos = self.find_matching_brace(wiki_text, match_start_absolute)
 
                 if end_pos != -1:
-                    infobox_content = wiki_text[actual_start + match.end():end_pos]
+                    # Extract content from end of pattern to closing brace
+                    infobox_content = wiki_text[match_end_absolute:end_pos]
                     print(f"  [DEBUG] Standalone infobox content length: {len(infobox_content)}")
+                    print(f"  [DEBUG] First 200 chars: {repr(infobox_content[:200])}")
 
                     infobox_data = self.parse_infobox_content(infobox_content)
                     if infobox_data:
@@ -239,7 +249,11 @@ class OSRSWikiScraper:
 
         # Parse key-value pairs
         raw_data = {}
-        for line in infobox_content.split('\n'):
+        lines = infobox_content.split('\n')
+        print(f"    [DEBUG] Total lines to parse: {len(lines)}")
+        print(f"    [DEBUG] First 5 lines: {lines[:5]}")
+
+        for line in lines:
             line = line.strip()
             if line.startswith('|'):
                 line = line[1:].strip()
@@ -247,26 +261,33 @@ class OSRSWikiScraper:
                     key, value = line.split('=', 1)
                     key = key.strip()
                     value = value.strip()
-                    value = self.clean_wiki_text(value)
                     raw_data[key] = value
+
+                    # Debug: print version-related keys as we find them
+                    if 'version' in key:
+                        print(f"    [DEBUG] Found version key: '{key}' = '{value}'")
 
         print(f"    [DEBUG] Parsed {len(raw_data)} key-value pairs from infobox")
 
         # Show some sample keys
-        sample_keys = list(raw_data.keys())[:10]
-        print(f"    [DEBUG] Sample keys: {sample_keys}")
+        sample_keys = list(raw_data.keys())[:15]  # Show more keys
+        print(f"    [DEBUG] First 15 keys: {sample_keys}")
 
-        # Check if this infobox has multiple versions
-        has_versions = any(key.startswith('version') for key in raw_data.keys())
+        # Check specifically for version keys
+        version_keys = [k for k in raw_data.keys() if k.startswith('version')]
+        print(f"    [DEBUG] Version-related keys found: {version_keys}")
+
+        # Check if this infobox has multiple versions by looking for version1, version2, etc.
+        has_versions = any(k.startswith('version') and len(k) > 7 and k[7:].isdigit() for k in raw_data.keys())
         print(f"    [DEBUG] Has versions: {has_versions}")
 
         if has_versions:
-            # Find how many versions there are
+            # Find how many versions there are by looking for version1, version2, etc.
             version_numbers = set()
             for key in raw_data.keys():
-                match = re.match(r'(\w+?)(\d+)$', key)
-                if match:
-                    version_numbers.add(int(match.group(2)))
+                if key.startswith('version') and len(key) > 7 and key[7:].isdigit():
+                    version_num = int(key[7:])
+                    version_numbers.add(version_num)
 
             print(f"    [DEBUG] Version numbers found: {sorted(version_numbers)}")
 
@@ -279,25 +300,42 @@ class OSRSWikiScraper:
 
                 # Extract version-specific fields
                 for key, value in raw_data.items():
+                    # Skip the version name keys themselves
+                    if key == f'version{version_num}' or key == f'bucketname{version_num}':
+                        continue
+
                     if key.endswith(str(version_num)):
                         # Remove the version number suffix
                         base_key = key[:-len(str(version_num))]
-                        version_data[base_key] = value
+                        cleaned_value = self.clean_wiki_text(value)
+                        version_data[base_key] = cleaned_value
                     elif not any(key.endswith(str(v)) for v in version_numbers):
                         # This is a shared field (no version number)
-                        version_data[key] = value
+                        cleaned_value = self.clean_wiki_text(value)
+                        version_data[key] = cleaned_value
 
-                print(f"    [DEBUG] Version {version_num} has {len(version_data)} fields")
+                print(f"    [DEBUG] Version {version_num} ('{version_data['versionName']}') has {len(version_data)} fields")
+
+                # Debug: show attack style and max hit for this version
+                if 'attack style' in version_data:
+                    print(f"    [DEBUG] Version {version_num} attack style: '{version_data['attack style']}'")
+                if 'max hit' in version_data:
+                    print(f"    [DEBUG] Version {version_num} max hit: '{version_data['max hit']}'")
+
                 data['versions'].append(version_data)
         else:
             # Single version, use all data as-is
-            version_data = raw_data.copy()
+            version_data = {}
+            for key, value in raw_data.items():
+                cleaned_value = self.clean_wiki_text(value)
+                version_data[key] = cleaned_value
             version_data['versionNumber'] = 1
-            version_data['versionName'] = raw_data.get('name', 'Default')
+            version_data['versionName'] = version_data.get('name', 'Default')
             print(f"    [DEBUG] Single version with {len(version_data)} fields")
             data['versions'].append(version_data)
 
         return data if data['versions'] else None
+
 
     def clean_wiki_text(self, text: str) -> str:
         """
@@ -359,17 +397,18 @@ class OSRSWikiScraper:
         Also handles:
         - "30 ([[Magic]]), 32 ([[Ranged]]), 80 ([[Dragonfire]]), 121 (Bomb)"
         - "47 <br/> 60 (charge)" → 47 for all styles, 60 for charge
-        - "24" with no type → 24 for all styles in attackStyle
+        - "24" with no type → 24 for all styles in attackStyle (or default if no attack style)
         """
         max_hits = {}
 
         # Get attack styles for this NPC
         attack_style = infobox_data.get('attack style', '').lower()
+        has_attack_style = bool(attack_style.strip())
 
         # Check for different max hit fields
         fields_to_check = [
-            ('max hit', 'default'),
-            ('maxhit', 'default'),
+            ('max hit', None),
+            ('maxhit', None),
             ('max melee', 'melee'),
             ('max magic', 'magic'),
             ('max ranged', 'ranged'),
@@ -425,21 +464,19 @@ class OSRSWikiScraper:
                                 # This applies to all attack styles
                                 base_max_hit = hit_value
 
-                    # If we found a base max hit, apply it to all attack styles
+                    # If we found a base max hit, apply it appropriately
                     if base_max_hit is not None:
-                        # Determine which styles are used
-                        if 'melee' in attack_style:
-                            max_hits.setdefault('melee', base_max_hit)
-                        if 'magic' in attack_style or 'mage' in attack_style:
-                            max_hits.setdefault('magic', base_max_hit)
-                        if 'ranged' in attack_style or 'range' in attack_style:
-                            max_hits.setdefault('ranged', base_max_hit)
-                        if 'crush' in attack_style and 'melee' not in attack_style:
-                            max_hits.setdefault('melee', base_max_hit)
-
-                        # If no specific styles detected, just set default
-                        if not any(s in attack_style for s in ['melee', 'magic', 'mage', 'ranged', 'range', 'crush', 'slash', 'stab']):
-                            max_hits['default'] = base_max_hit
+                        if has_attack_style:
+                            # Determine which styles are used
+                            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                                max_hits.setdefault('melee', base_max_hit)
+                            if 'magic' in attack_style or 'mage' in attack_style:
+                                max_hits.setdefault('magic', base_max_hit)
+                            if 'ranged' in attack_style or 'range' in attack_style:
+                                max_hits.setdefault('ranged', base_max_hit)
+                        else:
+                            # No attack style specified, use default
+                            max_hits.setdefault('default', base_max_hit)
 
                 # Check if this is a complex format with multiple attacks separated by commas
                 elif '[[' in value or '),' in value:
@@ -492,13 +529,21 @@ class OSRSWikiScraper:
                             if num_match and not max_hits:
                                 # First number without a type
                                 hit_value = int(num_match.group(1))
-                                max_hits[attack_type] = hit_value
+                                if has_attack_style:
+                                    # Apply to all styles from attack_style
+                                    if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                                        max_hits.setdefault('melee', hit_value)
+                                    if 'magic' in attack_style or 'mage' in attack_style:
+                                        max_hits.setdefault('magic', hit_value)
+                                    if 'ranged' in attack_style or 'range' in attack_style:
+                                        max_hits.setdefault('ranged', hit_value)
+                                else:
+                                    max_hits['default'] = hit_value
                 else:
                     # Simple format, just a number
                     hit_value = self.parse_number(value)
                     if hit_value is not None:
-                        # If this is the "max hit" field (not a specific style), apply to all styles
-                        if field_name in ['max hit', 'maxhit']:
+                        if has_attack_style:
                             # Apply to all attack styles from attack_style field
                             if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
                                 max_hits['melee'] = hit_value
@@ -507,29 +552,27 @@ class OSRSWikiScraper:
                             if 'ranged' in attack_style or 'range' in attack_style:
                                 max_hits['ranged'] = hit_value
 
-                            # If no styles detected or only has dragonfire/special, set default
-                            if not max_hits:
+                            # For specific style fields, also add the specific style
+                            if attack_type:
                                 max_hits[attack_type] = hit_value
                         else:
-                            # Specific style field
-                            max_hits[attack_type] = hit_value
+                            # No attack style specified, use default
+                            max_hits['default'] = hit_value
 
-        # If we only have 'default', check attack style to categorize it
-        if 'default' in max_hits and len(max_hits) == 1:
+        # Final cleanup: Remove 'default' only if we have attack styles AND other max hits
+        if 'default' in max_hits and has_attack_style and len(max_hits) > 1:
             default_val = max_hits['default']
             del max_hits['default']
 
+            # Apply to all attack styles if not already set
             if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
-                max_hits['melee'] = default_val
+                max_hits.setdefault('melee', default_val)
             if 'magic' in attack_style or 'mage' in attack_style:
-                max_hits['magic'] = default_val
+                max_hits.setdefault('magic', default_val)
             if 'ranged' in attack_style or 'range' in attack_style:
-                max_hits['ranged'] = default_val
+                max_hits.setdefault('ranged', default_val)
 
-            # If still empty, put it back as default
-            if not max_hits:
-                max_hits['default'] = default_val
-
+        print(f"    [DEBUG] Final max_hits (after default cleanup): {max_hits}")
         return max_hits
 
     def parse_attributes(self, infobox_data: Dict[str, str]) -> List[str]:
@@ -889,14 +932,14 @@ def main():
     scraper = OSRSWikiScraper()
 
     # Test with just Vorkath and Doom of Mokhaiotl
-    test_pages = ['Vorkath', 'Doom_of_Mokhaiotl']
-    scraper.scrape_all_npcs()
+    test_pages = ['Zulrah','Vorkath']
+    scraper.scrape_all_npcs(test_pages=test_pages)
 
     # Print summary
     scraper.print_summary()
 
     # Save to file
-    scraper.save_database('npc_database_test.json')
+    scraper.save_database('npc_database.json')
 
     print("\nDone! Check the debug output above to see what's happening.")
 
