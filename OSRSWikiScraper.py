@@ -397,6 +397,8 @@ class OSRSWikiScraper:
         """
         Parse max hit data from infobox
         Handles different attack styles with different max hits
+        Preserves specific melee types (crush, slash, stab) instead of converting to generic 'melee'
+        Auto-corrects when max hit says 'Melee' but attack style specifies a specific type
         """
         max_hits = {}
 
@@ -405,6 +407,17 @@ class OSRSWikiScraper:
         has_attack_style = bool(attack_style.strip())
 
         print(f"    [DEBUG] Attack style for max hit parsing: '{attack_style}'")
+
+        # Determine the specific melee type if present
+        specific_melee_type = None
+        if 'crush' in attack_style:
+            specific_melee_type = 'crush'
+        elif 'slash' in attack_style:
+            specific_melee_type = 'slash'
+        elif 'stab' in attack_style:
+            specific_melee_type = 'stab'
+
+        print(f"    [DEBUG] Specific melee type detected: {specific_melee_type}")
 
         # Check for different max hit fields
         fields_to_check = [
@@ -415,6 +428,9 @@ class OSRSWikiScraper:
             ('max ranged', 'ranged'),
             ('max mage', 'magic'),
             ('max range', 'ranged'),
+            ('max crush', 'crush'),
+            ('max slash', 'slash'),
+            ('max stab', 'stab'),
         ]
 
         for field_name, attack_type in fields_to_check:
@@ -425,8 +441,9 @@ class OSRSWikiScraper:
 
                 # Check if this contains <br/> or <br> - indicates multiple max hits
                 if '<br' in value.lower():
-                    # [Same as before - br handling code]
+                    # Split by <br/> or <br>
                     parts = re.split(r'<br\s*/?>',  value, flags=re.IGNORECASE)
+
                     base_max_hit = None
 
                     for part in parts:
@@ -442,8 +459,17 @@ class OSRSWikiScraper:
                             if attack_name:
                                 attack_name = attack_name.strip().lower()
                                 attack_name = re.sub(r'\[\[|\]\]', '', attack_name)
-                                if 'melee' in attack_name:
-                                    attack_name = 'melee'
+
+                                # Standardize attack names but preserve specific melee types
+                                if attack_name in ['crush', 'slash', 'stab']:
+                                    # Keep specific melee type
+                                    pass
+                                elif 'melee' in attack_name:
+                                    # If max hit says 'melee' but attack style has specific type, use that
+                                    if specific_melee_type:
+                                        attack_name = specific_melee_type
+                                    else:
+                                        attack_name = 'melee'
                                 elif 'magic' in attack_name or 'mage' in attack_name:
                                     attack_name = 'magic'
                                 elif 'ranged' in attack_name or 'range' in attack_name:
@@ -452,14 +478,19 @@ class OSRSWikiScraper:
                                     attack_name = attack_name.split('/')[0].strip().replace(' ', '_')
                                 else:
                                     attack_name = attack_name.replace(' ', '_')
+
                                 max_hits[attack_name] = hit_value
                             else:
                                 base_max_hit = hit_value
 
                     if base_max_hit is not None:
                         if has_attack_style and 'typeless' not in attack_style:
-                            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                            # Apply to specific attack styles based on what's in attack_style
+                            if specific_melee_type:
+                                max_hits.setdefault(specific_melee_type, base_max_hit)
+                            elif 'melee' in attack_style:
                                 max_hits.setdefault('melee', base_max_hit)
+
                             if 'magic' in attack_style or 'mage' in attack_style:
                                 max_hits.setdefault('magic', base_max_hit)
                             if 'ranged' in attack_style or 'range' in attack_style:
@@ -469,18 +500,37 @@ class OSRSWikiScraper:
 
                 # Check if this is a complex format with multiple attacks separated by commas
                 elif '[[' in value or '),' in value:
-                    # [Same complex parsing as before]
+                    print(f"    [DEBUG] Parsing complex format...")
                     parts = value.split(',')
+
                     for part in parts:
                         part = part.strip()
+                        print(f"      [DEBUG] Parsing part: '{part}'")
+
+                        # Extract number and attack type
                         match = re.search(r'(\d+)\s*(?:\(\[\[([^\]]+)\]\]\)|\(([^)]+)\))', part)
+
                         if match:
                             hit_value = int(match.group(1))
                             attack_name = match.group(2) or match.group(3)
+
+                            print(f"        [DEBUG] Matched: hit_value={hit_value}, attack_name={attack_name}")
+
+                            # Clean up attack name
                             attack_name = attack_name.strip().lower()
                             attack_name = re.sub(r'\[\[|\]\]', '', attack_name)
-                            if 'melee' in attack_name:
-                                attack_name = 'melee'
+
+                            # Standardize attack names but preserve specific melee types
+                            if attack_name in ['crush', 'slash', 'stab']:
+                                # Keep specific melee type
+                                pass
+                            elif 'melee' in attack_name:
+                                # AUTO-CORRECT: If max hit says 'melee' but attack style has specific type, use that
+                                if specific_melee_type:
+                                    print(f"        [DEBUG] Auto-correcting 'melee' to '{specific_melee_type}' based on attack style")
+                                    attack_name = specific_melee_type
+                                else:
+                                    attack_name = 'melee'
                             elif 'magic' in attack_name or 'mage' in attack_name:
                                 attack_name = 'magic'
                             elif 'ranged' in attack_name or 'range' in attack_name:
@@ -489,14 +539,21 @@ class OSRSWikiScraper:
                                 attack_name = attack_name.split('/')[0].strip().replace(' ', '_')
                             else:
                                 attack_name = attack_name.replace(' ', '_')
+
                             max_hits[attack_name] = hit_value
+                            print(f"        [DEBUG] Added: {attack_name} = {hit_value}")
                         else:
+                            print(f"        [DEBUG] No match for part: '{part}'")
                             num_match = re.search(r'(\d+)', part)
                             if num_match and not max_hits:
                                 hit_value = int(num_match.group(1))
                                 if has_attack_style and 'typeless' not in attack_style:
-                                    if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                                    # Apply to specific attack styles
+                                    if specific_melee_type:
+                                        max_hits.setdefault(specific_melee_type, hit_value)
+                                    elif 'melee' in attack_style:
                                         max_hits.setdefault('melee', hit_value)
+
                                     if 'magic' in attack_style or 'mage' in attack_style:
                                         max_hits.setdefault('magic', hit_value)
                                     if 'ranged' in attack_style or 'range' in attack_style:
@@ -508,18 +565,22 @@ class OSRSWikiScraper:
                     hit_value = self.parse_number(value)
                     if hit_value is not None:
                         if has_attack_style and 'typeless' not in attack_style:
-                            # Apply to all attack styles from attack_style field
-                            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+                            # Apply to specific attack styles from attack_style field
+                            if specific_melee_type:
+                                max_hits[specific_melee_type] = hit_value
+                            elif 'melee' in attack_style:
                                 max_hits['melee'] = hit_value
+
                             if 'magic' in attack_style or 'mage' in attack_style:
                                 max_hits['magic'] = hit_value
                             if 'ranged' in attack_style or 'range' in attack_style:
                                 max_hits['ranged'] = hit_value
 
+                            # For specific style fields, also add the specific style
                             if attack_type:
                                 max_hits[attack_type] = hit_value
                         else:
-                            # Typeless or no attack style - use typeless or default
+                            # Typeless or no attack style
                             if 'typeless' in attack_style:
                                 max_hits['typeless'] = hit_value
                             else:
@@ -530,8 +591,12 @@ class OSRSWikiScraper:
             default_val = max_hits['default']
             del max_hits['default']
 
-            if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
+            # Apply to specific attack styles
+            if specific_melee_type:
+                max_hits.setdefault(specific_melee_type, default_val)
+            elif 'melee' in attack_style:
                 max_hits.setdefault('melee', default_val)
+
             if 'magic' in attack_style or 'mage' in attack_style:
                 max_hits.setdefault('magic', default_val)
             if 'ranged' in attack_style or 'range' in attack_style:
@@ -679,6 +744,16 @@ class OSRSWikiScraper:
                 immunities = self.parse_immunities(version_data)
                 venom_type = self.parse_venom_type(version_data)
 
+                # Parse elemental weakness
+                elemental_weakness = None
+                weakness_type = version_data.get('elementalweaknesstype', '')
+                weakness_percent = self.parse_number(version_data.get('elementalweaknesspercent', ''))
+                if weakness_type and weakness_percent:
+                    elemental_weakness = {
+                        'type': weakness_type,
+                        'percent': weakness_percent
+                    }
+
                 # Create a unique identifier for this version
                 version_name = version_data.get('versionName', '')
                 bucket_name = version_data.get('bucketName', version_name)
@@ -738,6 +813,14 @@ class OSRSWikiScraper:
                     'magicLevel': self.parse_number(version_data.get('mage', '')),
                     'rangedLevel': self.parse_number(version_data.get('range', '')),
 
+                    # Offensive bonuses
+                    'attackBonus': self.parse_number(version_data.get('attbns', '')),
+                    'strengthBonus': self.parse_number(version_data.get('strbns', '')),
+                    'rangedAttackBonus': self.parse_number(version_data.get('arange', '')),
+                    'rangedStrengthBonus': self.parse_number(version_data.get('rngbns', '')),
+                    'magicAttackBonus': self.parse_number(version_data.get('amagic', '')),
+                    'magicStrengthBonus': self.parse_number(version_data.get('mbns', '')),
+
                     # Defensive bonuses
                     'stabDefence': self.parse_number(version_data.get('dstab', '')),
                     'slashDefence': self.parse_number(version_data.get('dslash', '')),
@@ -745,11 +828,13 @@ class OSRSWikiScraper:
                     'magicDefence': self.parse_number(version_data.get('dmagic', '')),
                     'rangedDefence': self.parse_number(version_data.get('drange', '')),
 
-                    # Offensive bonuses
-                    'attackBonus': self.parse_number(version_data.get('astab', '')),
-                    'strengthBonus': self.parse_number(version_data.get('astr', '')),
-                    'rangedAttackBonus': self.parse_number(version_data.get('arange', '')),
-                    'magicAttackBonus': self.parse_number(version_data.get('amagic', '')),
+                    # Ammo-specific defences
+                    'lightAmmoDefence': self.parse_number(version_data.get('dlight', '')),
+                    'standardAmmoDefence': self.parse_number(version_data.get('dstandard', '')),
+                    'heavyAmmoDefence': self.parse_number(version_data.get('dheavy', '')),
+
+                    # Elemental weakness
+                    'elementalWeakness': elemental_weakness,
 
                     # Slayer info
                     'slayerLevel': self.parse_number(version_data.get('slaylvl', '')),
@@ -898,6 +983,7 @@ def main():
 
     # Test with just Vorkath and Doom of Mokhaiotl
     test_pages = ['Zulrah','Vorkath']
+
     scraper.scrape_all_npcs()
 
     # Print summary
