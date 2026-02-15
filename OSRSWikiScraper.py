@@ -264,13 +264,13 @@ class OSRSWikiScraper:
                     raw_data[key] = value
 
                     # Debug: print version-related keys as we find them
-                    if 'version' in key:
-                        print(f"    [DEBUG] Found version key: '{key}' = '{value}'")
+                    if 'version' in key or 'max hit' in key:
+                        print(f"    [DEBUG] Found key: '{key}' = '{value[:50]}...'")
 
         print(f"    [DEBUG] Parsed {len(raw_data)} key-value pairs from infobox")
 
         # Show some sample keys
-        sample_keys = list(raw_data.keys())[:15]  # Show more keys
+        sample_keys = list(raw_data.keys())[:15]
         print(f"    [DEBUG] First 15 keys: {sample_keys}")
 
         # Check specifically for version keys
@@ -304,11 +304,14 @@ class OSRSWikiScraper:
                     if key == f'version{version_num}' or key == f'bucketname{version_num}':
                         continue
 
+                    # Check if this key ends with the version number
                     if key.endswith(str(version_num)):
                         # Remove the version number suffix
                         base_key = key[:-len(str(version_num))]
                         cleaned_value = self.clean_wiki_text(value)
                         version_data[base_key] = cleaned_value
+                        print(f"    [DEBUG] Version {version_num}: '{key}' -> '{base_key}' = '{cleaned_value[:30]}...'")
+                    # Check if this is a shared field (no version number suffix)
                     elif not any(key.endswith(str(v)) for v in version_numbers):
                         # This is a shared field (no version number)
                         cleaned_value = self.clean_wiki_text(value)
@@ -394,16 +397,14 @@ class OSRSWikiScraper:
         """
         Parse max hit data from infobox
         Handles different attack styles with different max hits
-        Also handles:
-        - "30 ([[Magic]]), 32 ([[Ranged]]), 80 ([[Dragonfire]]), 121 (Bomb)"
-        - "47 <br/> 60 (charge)" → 47 for all styles, 60 for charge
-        - "24" with no type → 24 for all styles in attackStyle (or default if no attack style)
         """
         max_hits = {}
 
         # Get attack styles for this NPC
         attack_style = infobox_data.get('attack style', '').lower()
         has_attack_style = bool(attack_style.strip())
+
+        print(f"    [DEBUG] Attack style for max hit parsing: '{attack_style}'")
 
         # Check for different max hit fields
         fields_to_check = [
@@ -424,9 +425,8 @@ class OSRSWikiScraper:
 
                 # Check if this contains <br/> or <br> - indicates multiple max hits
                 if '<br' in value.lower():
-                    # Split by <br/> or <br>
+                    # [Same as before - br handling code]
                     parts = re.split(r'<br\s*/?>',  value, flags=re.IGNORECASE)
-
                     base_max_hit = None
 
                     for part in parts:
@@ -434,19 +434,14 @@ class OSRSWikiScraper:
                         if not part:
                             continue
 
-                        # Check if this part has a type in parentheses
                         match = re.search(r'(\d+)\s*(?:\(([^)]+)\))?', part)
-
                         if match:
                             hit_value = int(match.group(1))
                             attack_name = match.group(2)
 
                             if attack_name:
-                                # This is a named attack (e.g., "60 (charge)")
                                 attack_name = attack_name.strip().lower()
                                 attack_name = re.sub(r'\[\[|\]\]', '', attack_name)
-
-                                # Standardize common names
                                 if 'melee' in attack_name:
                                     attack_name = 'melee'
                                 elif 'magic' in attack_name or 'mage' in attack_name:
@@ -457,17 +452,12 @@ class OSRSWikiScraper:
                                     attack_name = attack_name.split('/')[0].strip().replace(' ', '_')
                                 else:
                                     attack_name = attack_name.replace(' ', '_')
-
                                 max_hits[attack_name] = hit_value
                             else:
-                                # This is a base max hit without a type (e.g., "47")
-                                # This applies to all attack styles
                                 base_max_hit = hit_value
 
-                    # If we found a base max hit, apply it appropriately
                     if base_max_hit is not None:
-                        if has_attack_style:
-                            # Determine which styles are used
+                        if has_attack_style and 'typeless' not in attack_style:
                             if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
                                 max_hits.setdefault('melee', base_max_hit)
                             if 'magic' in attack_style or 'mage' in attack_style:
@@ -475,37 +465,20 @@ class OSRSWikiScraper:
                             if 'ranged' in attack_style or 'range' in attack_style:
                                 max_hits.setdefault('ranged', base_max_hit)
                         else:
-                            # No attack style specified, use default
-                            max_hits.setdefault('default', base_max_hit)
+                            max_hits.setdefault('typeless', base_max_hit)
 
                 # Check if this is a complex format with multiple attacks separated by commas
                 elif '[[' in value or '),' in value:
-                    print(f"    [DEBUG] Parsing complex format...")
-                    # Split by commas to get individual attacks
+                    # [Same complex parsing as before]
                     parts = value.split(',')
-
                     for part in parts:
                         part = part.strip()
-                        print(f"      [DEBUG] Parsing part: '{part}'")
-
-                        # Extract number and attack type
-                        # Pattern: "number ([[Attack Type]])" or "number (Attack Type)" or "number (Type/Name)"
                         match = re.search(r'(\d+)\s*(?:\(\[\[([^\]]+)\]\]\)|\(([^)]+)\))', part)
-
                         if match:
                             hit_value = int(match.group(1))
                             attack_name = match.group(2) or match.group(3)
-
-                            print(f"        [DEBUG] Matched: hit_value={hit_value}, attack_name={attack_name}")
-
-                            # Clean up attack name
                             attack_name = attack_name.strip().lower()
-
-                            # Handle special attack names
-                            # Remove wiki links
                             attack_name = re.sub(r'\[\[|\]\]', '', attack_name)
-
-                            # Standardize common names
                             if 'melee' in attack_name:
                                 attack_name = 'melee'
                             elif 'magic' in attack_name or 'mage' in attack_name:
@@ -513,24 +486,15 @@ class OSRSWikiScraper:
                             elif 'ranged' in attack_name or 'range' in attack_name:
                                 attack_name = 'ranged'
                             elif '/' in attack_name:
-                                # Special attack with slash (e.g., "Bomb/Special")
-                                # Take the first part and convert to snake_case
                                 attack_name = attack_name.split('/')[0].strip().replace(' ', '_')
                             else:
-                                # Keep as-is but convert to snake_case
                                 attack_name = attack_name.replace(' ', '_')
-
                             max_hits[attack_name] = hit_value
-                            print(f"        [DEBUG] Added: {attack_name} = {hit_value}")
                         else:
-                            print(f"        [DEBUG] No match for part: '{part}'")
-                            # Try to extract just a number
                             num_match = re.search(r'(\d+)', part)
                             if num_match and not max_hits:
-                                # First number without a type
                                 hit_value = int(num_match.group(1))
-                                if has_attack_style:
-                                    # Apply to all styles from attack_style
+                                if has_attack_style and 'typeless' not in attack_style:
                                     if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
                                         max_hits.setdefault('melee', hit_value)
                                     if 'magic' in attack_style or 'mage' in attack_style:
@@ -538,12 +502,12 @@ class OSRSWikiScraper:
                                     if 'ranged' in attack_style or 'range' in attack_style:
                                         max_hits.setdefault('ranged', hit_value)
                                 else:
-                                    max_hits['default'] = hit_value
+                                    max_hits['typeless'] = hit_value
                 else:
                     # Simple format, just a number
                     hit_value = self.parse_number(value)
                     if hit_value is not None:
-                        if has_attack_style:
+                        if has_attack_style and 'typeless' not in attack_style:
                             # Apply to all attack styles from attack_style field
                             if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
                                 max_hits['melee'] = hit_value
@@ -552,19 +516,20 @@ class OSRSWikiScraper:
                             if 'ranged' in attack_style or 'range' in attack_style:
                                 max_hits['ranged'] = hit_value
 
-                            # For specific style fields, also add the specific style
                             if attack_type:
                                 max_hits[attack_type] = hit_value
                         else:
-                            # No attack style specified, use default
-                            max_hits['default'] = hit_value
+                            # Typeless or no attack style - use typeless or default
+                            if 'typeless' in attack_style:
+                                max_hits['typeless'] = hit_value
+                            else:
+                                max_hits['default'] = hit_value
 
-        # Final cleanup: Remove 'default' only if we have attack styles AND other max hits
-        if 'default' in max_hits and has_attack_style and len(max_hits) > 1:
+        # Final cleanup
+        if 'default' in max_hits and has_attack_style and 'typeless' not in attack_style and len(max_hits) > 1:
             default_val = max_hits['default']
             del max_hits['default']
 
-            # Apply to all attack styles if not already set
             if 'melee' in attack_style or 'slash' in attack_style or 'crush' in attack_style or 'stab' in attack_style:
                 max_hits.setdefault('melee', default_val)
             if 'magic' in attack_style or 'mage' in attack_style:
@@ -933,7 +898,7 @@ def main():
 
     # Test with just Vorkath and Doom of Mokhaiotl
     test_pages = ['Zulrah','Vorkath']
-    scraper.scrape_all_npcs(test_pages=test_pages)
+    scraper.scrape_all_npcs()
 
     # Print summary
     scraper.print_summary()
