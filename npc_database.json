@@ -121358,6 +121358,8 @@
         "thrall": false
       },
       "attackLevel": 280,
+      "strengthLevel": 270,
+      "defenceLevel": 215,
       "magicLevel": 215,
       "rangedLevel": 0,
       "attackBonus": 190,
@@ -121405,6 +121407,8 @@
         "thrall": false
       },
       "attackLevel": 420,
+      "strengthLevel": 391,
+      "defenceLevel": 268,
       "magicLevel": 215,
       "rangedLevel": 0,
       "attackBonus": 190,
