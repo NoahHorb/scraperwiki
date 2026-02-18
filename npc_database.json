@@ -121342,7 +121342,7 @@
       },
       "minHit": {
         "slash": 0,
-        "axes": 0
+        "axes": 15
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
@@ -121391,7 +121391,7 @@
       },
       "minHit": {
         "slash": 0,
-        "axes": 0
+        "axes": 15
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
@@ -121435,10 +121435,12 @@
       "hitpoints": 500,
       "size": 2,
       "maxHit": {
-        "slash": 37
+        "slash": 37,
+        "axes": 30
       },
       "minHit": {
         "slash": 0
+        "axes": 12
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
