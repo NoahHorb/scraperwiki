@@ -121439,7 +121439,7 @@
         "axes": 30
       },
       "minHit": {
-        "slash": 0
+        "slash": 0,
         "axes": 12
       },
       "attackSpeed": 5,
