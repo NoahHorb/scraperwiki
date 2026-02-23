@@ -121338,11 +121338,15 @@
       "size": 2,
       "maxHit": {
         "slash": 43,
-        "axes": 35
+        "axes": 35,
+        "strangle": 25,
+        "spikes": 25
       },
       "minHit": {
         "slash": 0,
-        "axes": 15
+        "axes": 15,
+        "strangle": 15,
+        "spikes": 15
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
@@ -121387,11 +121391,15 @@
       "size": 2,
       "maxHit": {
         "slash": 61,
-        "axes": 96
+        "axes": 96,
+        "strangle": 40,
+        "spikes": 40
       },
       "minHit": {
         "slash": 0,
-        "axes": 15
+        "axes": 30,
+        "strangle": 30,
+        "spikes": 30
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
@@ -121436,11 +121444,15 @@
       "size": 2,
       "maxHit": {
         "slash": 37,
-        "axes": 30
+        "axes": 30,
+        "strangle": 20,
+        "spikes": 20
       },
       "minHit": {
         "slash": 0,
-        "axes": 12
+        "axes": 12,
+        "strangle": 12,
+        "spikes": 12
       },
       "attackSpeed": 5,
       "attackStyle": "[[Slash]]",
