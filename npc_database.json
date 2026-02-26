@@ -121344,7 +121344,7 @@
       },
       "minHit": {
         "slash": 0,
-        "axes": 15,
+        "axes": 25,
         "strangle": 15,
         "spikes": 15
       },
@@ -121397,7 +121397,7 @@
       },
       "minHit": {
         "slash": 0,
-        "axes": 30,
+        "axes": 60,
         "strangle": 30,
         "spikes": 30
       },
@@ -121450,7 +121450,7 @@
       },
       "minHit": {
         "slash": 0,
-        "axes": 12,
+        "axes": 20,
         "strangle": 12,
         "spikes": 12
       },
